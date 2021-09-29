@@ -1,0 +1,21 @@
+{
+    "makefile.extensionOutputFolder": "./.vscode",
+    "makefile.makePath": "/usr/bin/make",
+    "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools",
+    "makefile.configurations": [
+
+        {
+            "name": "sptrsv configuration"
+        }
+    ],
+
+    "makefile.launchConfigurations": [
+
+        {
+            "cwd":"/home/unix/Benchmark_SpTRSM_using_CSC/SpTRSV_cuda",
+            "binaryPath":"/home/unix/Benchmark_SpTRSM_using_CSC/SpTRSV_cuda/build/sptrsv",
+            "binaryArgs":["-d 0 -rhs 1 -forward -mtx FEM_3D_thermal2.mtx"]
+        }
+    
+    ]
+}

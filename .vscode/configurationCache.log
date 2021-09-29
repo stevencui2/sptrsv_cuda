@@ -1,0 +1,1 @@
+{"buildTargets":["all","build/./main.cu.o","build/sptrsv","clean"],"launchTargets":[],"customConfigurationProvider":{"workspaceBrowse":{"browsePath":[],"compilerArgs":[]},"fileIndex":[]}}
