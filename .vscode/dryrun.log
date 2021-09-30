@@ -1,8 +1,8 @@
-/usr/bin/make all --dry-run --always-make --keep-going --print-directory
+make all --dry-run --keep-going --print-directory
 make: Entering directory '/home/unix/Benchmark_SpTRSM_using_CSC/SpTRSV_cuda'
  
 mkdir -p build/./
-nvcc -O3 -w -m64 -Xptxas -dlcm=cg -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 -c main.cu -o build/./main.cu.o -I/usr/local/cuda/include -L/usr/local/cuda/lib64  -lcudart  -D VALUE_TYPE=double
+nvcc -O3 -w -m64 -Xptxas -dlcm=cg -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 -c main.cu -o build/./main.cu.o -I/usr/local/cuda/include   -L/usr/local/cuda/lib64  -lcudart  -D VALUE_TYPE=double
 nvcc ./build/./main.cu.o -o build/sptrsv	
 make: Leaving directory '/home/unix/Benchmark_SpTRSM_using_CSC/SpTRSV_cuda'
  

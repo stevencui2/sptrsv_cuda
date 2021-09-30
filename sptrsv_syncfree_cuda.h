@@ -4,6 +4,7 @@
 #include "common.h"
 #include "utils.h"
 #include <cuda_runtime.h>
+#include "device_launch_parameters.h"
 
 __global__
 void sptrsv_syncfree_cuda_analyser(const int   *d_cscRowIdx,

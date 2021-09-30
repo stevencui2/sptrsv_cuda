@@ -11,7 +11,7 @@ NVCC_FLAGS = -O3 -w -m64 -Xptxas -dlcm=cg -gencode=arch=compute_61,code=sm_61 -g
 CUDA_INSTALL_PATH = /usr/local/cuda
 
 #includes
-INCLUDES = -I$(CUDA_INSTALL_PATH)/include
+INCLUDES = -I$(CUDA_INSTALL_PATH)/include  
 
 #libs
 #CLANG_LIBS = -stdlib=libstdc++ -lstdc++

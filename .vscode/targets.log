@@ -1,12 +1,13 @@
-/usr/bin/make all --print-data-base --no-builtin-variables --no-builtin-rules --question
+make all --print-data-base --no-builtin-variables --no-builtin-rules --question
 # GNU Make 4.2.1
 # Built for x86_64-pc-linux-gnu
 # Copyright (C) 1988-2016 Free Software Foundation, Inc.
 # License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
 # This is free software: you are free to change and redistribute it.
+ 
 # There is NO WARRANTY, to the extent permitted by law.
 
-# Make data base, printed on Wed Sep 29 14:29:04 2021
+# Make data base, printed on Thu Sep 30 09:21:04 2021
 
 # Variables
 
@@ -25,7 +26,7 @@ VSCODE_LOG_NATIVE = false
 # automatic
 ?D = $(patsubst %/,%,$(dir $?))
 # makefile (from 'Makefile', line 14)
-INCLUDES = -I$(CUDA_INSTALL_PATH)/include
+INCLUDES = -I$(CUDA_INSTALL_PATH)/include  
 # automatic
 @D = $(patsubst %/,%,$(dir $@))
 # automatic
@@ -61,7 +62,7 @@ VALUE_TYPE = double
 # environment
 VSCODE_LOG_STACK = false
 # environment
-VSCODE_IPC_HOOK_CLI = /tmp/vscode-ipc-1fe6b040-dbc1-4cc8-a411-65c1b9b94e83.sock
+VSCODE_IPC_HOOK_CLI = /tmp/vscode-ipc-2da5e29f-7dc0-4ff3-977f-8b0f6ebbcf0e.sock
 # default
 .FEATURES := target-specific order-only second-expansion else-if shortest-stem undefine oneshell archives jobserver output-sync check-symlink load
 # environment
@@ -129,7 +130,7 @@ NAME = Code
 # environment
 VSCODE_WSL_EXT_LOCATION = /mnt/c/Users/lcui/.vscode/extensions/ms-vscode-remote.remote-wsl-0.58.2
 # default
-MAKE_COMMAND := /usr/bin/make
+MAKE_COMMAND := make
 # default
 .VARIABLES := 
 # automatic
@@ -189,9 +190,9 @@ MOTD_SHOWN = update-motd
 
 # Directories
 
-# . (device 2, inode 844424930898425): 15 files, no impossibilities.
+# . (device 2, inode 844424930898425): 19 files, no impossibilities.
 
-# 15 files, no impossibilities in 1 directories.
+# 19 files, no impossibilities in 1 directories.
 
 # Implicit Rules
 
@@ -213,7 +214,7 @@ all: build/sptrsv
 
 build/sptrsv: build/./main.cu.o
 #  Implicit rule search has not been done.
-#  Last modified 2021-09-28 15:02:48.8075819
+#  Last modified 2021-09-29 15:48:55.625894
 #  File has been updated.
 #  Successfully updated.
 #  recipe to execute (from 'Makefile', line 40):
@@ -222,14 +223,14 @@ build/sptrsv: build/./main.cu.o
 # Not a target:
 Makefile:
 #  Implicit rule search has been done.
-#  Last modified 2021-09-14 14:15:50.6243999
+#  Last modified 2021-09-29 15:44:33.2944003
 #  File has been updated.
 #  Successfully updated.
 
 build/./main.cu.o: main.cu
 #  Implicit rule search has been done.
 #  Implicit/static pattern stem: './main'
-#  Last modified 2021-09-28 15:02:48.2223606
+#  Last modified 2021-09-29 15:48:55.0126812
 #  File has been updated.
 #  Successfully updated.
 #  recipe to execute (from 'Makefile', line 43):
@@ -252,7 +253,7 @@ clean:
 # Not a target:
 main.cu:
 #  Implicit rule search has been done.
-#  Last modified 2021-09-28 11:59:58.5148705
+#  Last modified 2021-09-29 15:48:42.8439998
 #  File has been updated.
 #  Successfully updated.
 
@@ -264,12 +265,12 @@ main.cu:
 
 # No general ('VPATH' variable) search path.
 
-# strcache buffers: 1 (0) / strings = 26 / storage = 283 B / avg = 10 B
-# current buf: size = 8162 B / used = 283 B / count = 26 / avg = 10 B
+# strcache buffers: 1 (0) / strings = 30 / storage = 317 B / avg = 10 B
+# current buf: size = 8162 B / used = 317 B / count = 30 / avg = 10 B
 
-# strcache performance: lookups = 37 / hit rate = 29%
+# strcache performance: lookups = 41 / hit rate = 26%
 # hash-table stats:
-# Load=26/8192=0%, Rehash=0, Collisions=1/37=3%
-# Finished Make data base on Wed Sep 29 14:29:04 2021
+# Load=30/8192=0%, Rehash=0, Collisions=1/41=2%
+# Finished Make data base on Thu Sep 30 09:21:04 2021
 
  
