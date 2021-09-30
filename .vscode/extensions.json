@@ -1,5 +1,6 @@
 {
     "recommendations": [
-        "nvidia.nsight-vscode-edition"
+        "nvidia.nsight-vscode-edition",
+        "kriegalex.vscode-cudacpp"
     ]
 }

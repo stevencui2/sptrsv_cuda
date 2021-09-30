@@ -17,5 +17,13 @@
             ]
         }
     ],
-    "C_Cpp.errorSquiggles": "Disabled"
+    "C_Cpp.errorSquiggles": "EnabledIfIncludesResolve",
+    
+
+    "files.associations": {
+        "*.cu": "cpp",
+        "*.cuh": "cpp"
+      }
+
+
 }

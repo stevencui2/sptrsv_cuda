@@ -77,7 +77,9 @@ int findlevel_csc(const int           *cscColPtr,
                         int           *nlevel,
                         int           *parallelism_min,
                         int           *parallelism_avg,
-                        int           *parallelism_max)
+                        int           *parallelism_max,
+                        int           *levelPtr,
+                        int           *levelItem)
 {
     if (m != n)
     {
@@ -94,9 +96,6 @@ int findlevel_csc(const int           *cscColPtr,
     matrix_transposition(m, n, nnz,
                          cscColPtr, cscRowIdx, cscVal,
                          csrColIdx, csrRowPtr, csrVal);
-
-    int  *levelPtr  = (int *)malloc((m+1) * sizeof(int));
-    int  *levelItem = (int *)malloc(m * sizeof(int));
 
     int nlv = 0;
     findlevel(cscColPtr, cscRowIdx, csrRowPtr, m, &nlv, levelPtr, levelItem);
@@ -137,8 +136,6 @@ int findlevel_csc(const int           *cscColPtr,
 
     *nlevel = nlv;
 
-    free(levelPtr);
-    free(levelItem);
     free(csrRowPtr);
     free(csrColIdx);
     free(csrVal);

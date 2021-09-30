@@ -5,7 +5,7 @@
 #include "findlevel.h"
 
 #include "sptrsv_syncfree_serialref.h"
-#include "sptrsv_syncfree_cuda.h"
+#include "sptrsv_syncfree_cuda.cuh"
 
 int main(int argc, char ** argv)
 {
@@ -299,8 +299,10 @@ int main(int argc, char ** argv)
     int parallelism_min = 0;
     int parallelism_avg = 0;
     int parallelism_max = 0;
+    int  *levelPtr  = (int *)malloc((m+1) * sizeof(int));
+    int  *levelItem = (int *)malloc(m * sizeof(int));
     findlevel_csc(cscColPtrTR, cscRowIdxTR, cscValTR, m, n, nnzTR, &nlevel,
-                  &parallelism_min, &parallelism_avg, &parallelism_max);
+                  &parallelism_min, &parallelism_avg, &parallelism_max,levelPtr,levelItem);
     double fparallelism = (double)m/(double)nlevel;
     printf("This matrix/graph has %i levels, its parallelism is %4.2f (min: %i ; avg: %i ; max: %i )\n", 
            nlevel, fparallelism, parallelism_min, parallelism_avg, parallelism_max);
@@ -351,7 +353,7 @@ int main(int argc, char ** argv)
     printf("---------------------------------------------------------------------------------------------\n");
     double gflops_autotuned = 0;
     sptrsvCSC_syncfree_cuda(cscColPtrTR, cscRowIdxTR, cscValTR, m, n, nnzTR,
-                         substitution, rhs, OPT_WARP_AUTO, x, b, x_ref, &gflops_autotuned);
+                         substitution, rhs, OPT_WARP_AUTO, x, b, x_ref, &gflops_autotuned,levelItem);
 
     printf("---------------------------------------------------------------------------------------------\n");
 
@@ -372,6 +374,9 @@ int main(int argc, char ** argv)
     free(cscRowIdxTR);
     free(cscColPtrTR);
     free(cscValTR);
+
+    free(levelPtr);
+    free(levelItem);
 
     free(x);
     free(x_ref);

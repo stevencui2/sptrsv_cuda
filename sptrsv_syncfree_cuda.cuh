@@ -5,12 +5,12 @@
 #include "utils.h"
 #include <cuda_runtime.h>
 #include "device_launch_parameters.h"
+#include <cuda_fp16.h>
 
-__global__
-void sptrsv_syncfree_cuda_analyser(const int   *d_cscRowIdx,
-                                   const int    m,
-                                   const int    nnz,
-                                         int   *d_graphInDegree)
+__global__ void sptrsv_syncfree_cuda_analyser(const int *d_cscRowIdx,
+                                              const int m,
+                                              const int nnz,
+                                              int *d_graphInDegree)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x; //get_global_id(0);
     if (global_id < nnz)
@@ -18,102 +18,178 @@ void sptrsv_syncfree_cuda_analyser(const int   *d_cscRowIdx,
         atomicAdd(&d_graphInDegree[d_cscRowIdx[global_id]], 1);
     }
 }
-__global__
-void sptrsvCSRAnalyser(const int* d_csrRowPtr,
-	const int    m,
-	int* d_graphInDegree)
+__global__ void sptrsvCSRAnalyser(const int *d_csrRowPtr,
+                                  const int m,
+                                  int *d_graphInDegree)
 {
-	const int gidx = blockIdx.x * blockDim.x + threadIdx.x; //get_global_id(0);
-	if (gidx < m)
-	{
-		d_graphInDegree[gidx]=d_csrRowPtr[gidx+1]-d_csrRowPtr[gidx];
-	}
+    const int gidx = blockIdx.x * blockDim.x + threadIdx.x; //get_global_id(0);
+    if (gidx < m)
+    {
+        d_graphInDegree[gidx] = d_csrRowPtr[gidx + 1] - d_csrRowPtr[gidx];
+    }
 }
-template<typename T>
+template <typename T>
 __global__ void sptrsvCSRSyncfree(
-	const int* __restrict__ d_csrRowPtr,
-	const int* __restrict__ d_csrColInd,
-	const T* __restrict__ d_csrVal,
-	const T* __restrict__ d_RHS,
-	int* d_graphInDegree,
-	const int substitution,
-	const int m,
-	T* d_y)
+    const int *__restrict__ d_csrRowPtr,
+    const int *__restrict__ d_csrColInd,
+    const T *__restrict__ d_csrVal,
+    const T *__restrict__ d_RHS,
+    int *d_graphInDegree,
+    const int substitution,
+    const int m,
+    T *d_y)
 {
-	const int gIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	int gXIdx = gIdx / WARP_SIZE;
-	if (gXIdx >= m) return;
+    const int gIdx = blockIdx.x * blockDim.x + threadIdx.x;
+    int gXIdx = gIdx / WARP_SIZE;
+    if (gXIdx >= m)
+        return;
 
-	// substitution is forward or backward
-	gXIdx = substitution == SUBSTITUTION_FORWARD ? gXIdx : m - 1 - gXIdx;
+    // substitution is forward or backward
+    gXIdx = substitution == SUBSTITUTION_FORWARD ? gXIdx : m - 1 - gXIdx;
 
-	volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
-	volatile __shared__ T s_left_sum[WARP_PER_BLOCK];
+    volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
+    volatile __shared__ T s_left_sum[WARP_PER_BLOCK];
 
-	// Initialize
-	const int localWarpIdx = threadIdx.x / WARP_SIZE;
-	const int laneIdx = (WARP_SIZE - 1) & threadIdx.x;
+    // Initialize
+    const int localWarpIdx = threadIdx.x / WARP_SIZE;
+    const int laneIdx = (WARP_SIZE - 1) & threadIdx.x;
 
-	int starting_x = (gIdx / (WARP_PER_BLOCK * WARP_SIZE)) * WARP_PER_BLOCK;
-	starting_x = substitution == SUBSTITUTION_FORWARD ? starting_x : m - 1 - starting_x;
+    int starting_x = (gIdx / (WARP_PER_BLOCK * WARP_SIZE)) * WARP_PER_BLOCK;
+    starting_x = substitution == SUBSTITUTION_FORWARD ? starting_x : m - 1 - starting_x;
 
-	// Prefetch
-	//const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx] : d_cscColPtr[gXIdx + 1] - 1;
-	const int pos = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx + 1] - 1 : d_csrRowPtr[gXIdx];
-	const T coef = (T)1 / d_csrVal[pos];
+    // Prefetch
+    //const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx] : d_cscColPtr[gXIdx + 1] - 1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx + 1] - 1 : d_csrRowPtr[gXIdx];
+    const T coef = (T)1 / d_csrVal[pos];
 
-	if (threadIdx.x < WARP_PER_BLOCK) { s_graphInDegree[threadIdx.x] = 1; s_left_sum[threadIdx.x] = 0; }
-	__syncthreads();
+    if (threadIdx.x < WARP_PER_BLOCK)
+    {
+        s_graphInDegree[threadIdx.x] = 1;
+        s_left_sum[threadIdx.x] = 0;
+    }
+    __syncthreads();
 
-	clock_t start;
-	// Consumer
-	do {
-		start = clock();
-	} while ((s_graphInDegree[localWarpIdx] + 1) != d_graphInDegree[gXIdx]);
+    clock_t start;
+    // Consumer
+    do
+    {
+        start = clock();
+    } while ((s_graphInDegree[localWarpIdx] + 1) != d_graphInDegree[gXIdx]);
 
+    T xi = s_left_sum[localWarpIdx];
+    xi = (d_RHS[gXIdx] - xi) * coef;
 
-	T xi = s_left_sum[localWarpIdx];
-	xi = (d_RHS[gXIdx] - xi) * coef;
+    // Producer
+    //const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx] + 1 : d_cscColPtr[gXIdx];
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx] : d_csrRowPtr[gXIdx] + 1;
+    //const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx + 1] : d_cscColPtr[gXIdx + 1] - 1;
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx + 1] - 1 : d_csrRowPtr[gXIdx + 1];
+    for (int jj = start_ptr + laneIdx; jj < stop_ptr; jj += WARP_SIZE)
+    {
+        const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
+        const int colIdx = d_csrColInd[j];
+        const int pos = substitution == SUBSTITUTION_FORWARD ? colIdx - starting_x : starting_x - colIdx;
+        atomicAdd((T *)&s_left_sum[pos], xi * d_csrVal[j]);
+        __threadfence_block();
+        atomicAdd((int *)&s_graphInDegree[pos], 1);
+    }
 
-	// Producer
-	//const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx] + 1 : d_cscColPtr[gXIdx];
-	const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx] : d_csrRowPtr[gXIdx] + 1;
-	//const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[gXIdx + 1] : d_cscColPtr[gXIdx + 1] - 1;
-	const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_csrRowPtr[gXIdx + 1] - 1 : d_csrRowPtr[gXIdx + 1];
-	for (int jj = start_ptr + laneIdx; jj < stop_ptr; jj += WARP_SIZE)
-	{
-		const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
-		const int colIdx = d_csrColInd[j];
-		const int pos = substitution == SUBSTITUTION_FORWARD ?
-			colIdx - starting_x : starting_x - colIdx;
-		atomicAdd((T*)&s_left_sum[pos], xi * d_csrVal[j]);
-		__threadfence_block();
-		atomicAdd((int*)&s_graphInDegree[pos], 1);
-
-	}
-
-	//finish
-	if (!laneIdx) d_y[gXIdx] = xi;
+    //finish
+    if (!laneIdx)
+        d_y[gXIdx] = xi;
 }
-__global__
-void sptrsv_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
-                                   const int* __restrict__        d_cscRowIdx,
-                                   const VALUE_TYPE* __restrict__ d_cscVal,
-                                         int*                     d_graphInDegree,
-                                         VALUE_TYPE*              d_left_sum,
-                                   const int                      m,
-                                   const int                      substitution,
-                                   const VALUE_TYPE* __restrict__ d_b,
-                                         VALUE_TYPE*              d_x,
-                                         int*                     d_while_profiler)
+
+template <typename T>
+__global__ void ELMR(int *__restrict__ rowptr, int *__restrict__ colind, T *__restrict__ val, T *__restrict__ f, int n, volatile T *x,
+                     volatile int *ready)
+{
+    int wid = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    int lane = threadIdx.x & (WARP_SIZE - 1);
+    if (wid >= n)
+        return;
+    int p = 0, q = 0, i = -1;
+    T sum = 0.0, diag;
+    if (lane < 2)
+    {
+        i = wid;
+        p = rowptr[i + lane];
+    }
+    q = __shfl_sync(-1, p, 1);
+    p = __shfl_sync(-1, p, 0);
+    if (lane == 0)
+    {
+        sum = f[i];
+        diag = val[rowptr[wid + 1] - 1];
+    }
+    for (p += lane; p < q; p += WARP_SIZE)
+    {
+        while (ready[colind[p]] == 0)
+            ;
+        sum -= val[p] * x[colind[p]];
+    }
+#pragma unroll // parallel reduction
+    for (int d = WARP_SIZE / 2; d > 0; d >>= 1)
+        sum += __shfl_down_sync(-1, sum, d);
+    if (lane == 0)
+    {
+        x[i] = sum / diag;
+        __threadfence();
+        ready[i] = 1;
+    }
+}
+
+template <typename T>
+__global__ void
+ELMC(
+    int *colptr, int *rowind, T *val,  int *count, const int n, T *__restrict__ f,  T *x, int *jlev)
+{
+    int wid = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    int lane = threadIdx.x & (WARP_SIZE - 1);
+    if (wid >= n)
+        return;
+    int p = 0, q = 0,i=-1;
+    T t = 0.0;
+    if (lane < 2)
+    {
+        i = jlev[wid];
+        p = colptr[i + lane];
+    }
+    q = __shfl_sync(-1, p, 1);
+    p = __shfl_sync(-1, p, 0);
+    if (lane == 0)
+    {
+        t = 1.0 / colptr[i];
+        x[i] = f[i];
+        while (count[i] != 0)
+            ;
+        x[i] = t = x[i] * t;
+    }
+    t = __shfl_sync(-1, t, 0);
+    for (p += lane; p < q; p += WARP_SIZE)
+    {
+        atomicAdd(&x[rowind[p]], -t * val[p]);
+        __threadfence();
+        atomicSub(&count[rowind[p]], 1);
+    }
+}
+__global__ void sptrsv_syncfree_cuda_executor(const int *__restrict__ d_cscColPtr,
+                                              const int *__restrict__ d_cscRowIdx,
+                                              const VALUE_TYPE *__restrict__ d_cscVal,
+                                              int *d_graphInDegree,
+                                              VALUE_TYPE *d_left_sum,
+                                              const int m,
+                                              const int substitution,
+                                              const VALUE_TYPE *__restrict__ d_b,
+                                              VALUE_TYPE *d_x,
+                                              int *d_while_profiler)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
     int global_x_id = global_id / WARP_SIZE;
-    if (global_x_id >= m) return;
+    if (global_x_id >= m)
+        return;
 
     // substitution is forward or backward
-    global_x_id = substitution == SUBSTITUTION_FORWARD ? 
-                  global_x_id : m - 1 - global_x_id;
+    global_x_id = substitution == SUBSTITUTION_FORWARD ? global_x_id : m - 1 - global_x_id;
 
     volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
     volatile __shared__ VALUE_TYPE s_left_sum[WARP_PER_BLOCK];
@@ -122,31 +198,33 @@ void sptrsv_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     const int local_warp_id = threadIdx.x / WARP_SIZE;
     const int lane_id = (WARP_SIZE - 1) & threadIdx.x;
     int starting_x = (global_id / (WARP_PER_BLOCK * WARP_SIZE)) * WARP_PER_BLOCK;
-    starting_x = substitution == SUBSTITUTION_FORWARD ? 
-                  starting_x : m - 1 - starting_x;
-    
+    starting_x = substitution == SUBSTITUTION_FORWARD ? starting_x : m - 1 - starting_x;
+
     // Prefetch
-    const int pos = substitution == SUBSTITUTION_FORWARD ?
-                    d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id+1]-1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id + 1] - 1;
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
-    if (threadIdx.x < WARP_PER_BLOCK) { s_graphInDegree[threadIdx.x] = 1; s_left_sum[threadIdx.x] = 0; }
+    if (threadIdx.x < WARP_PER_BLOCK)
+    {
+        s_graphInDegree[threadIdx.x] = 1;
+        s_left_sum[threadIdx.x] = 0;
+    }
     __syncthreads();
 
     clock_t start;
     // Consumer
-    do {
+    do
+    {
         start = clock();
-    }
-    while (s_graphInDegree[local_warp_id] != d_graphInDegree[global_x_id]);
-  
+    } while (s_graphInDegree[local_warp_id] != d_graphInDegree[global_x_id]);
+
     //// Consumer
     //int graphInDegree;
     //do {
     //    //bypass Tex cache and avoid other mem optimization by nvcc/ptxas
-    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory"); 
+    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory");
     //}
     //while (s_graphInDegree[local_warp_id] != graphInDegree );
 
@@ -154,24 +232,22 @@ void sptrsv_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     xi = (d_b[global_x_id] - xi) * coef;
 
     // Producer
-    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id]+1 : d_cscColPtr[global_x_id];
-    const int stop_ptr  = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id+1] : d_cscColPtr[global_x_id+1]-1;
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] + 1 : d_cscColPtr[global_x_id];
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id + 1] : d_cscColPtr[global_x_id + 1] - 1;
     for (int jj = start_ptr + lane_id; jj < stop_ptr; jj += WARP_SIZE)
     {
         const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
         const int rowIdx = d_cscRowIdx[j];
-        const bool cond = substitution == SUBSTITUTION_FORWARD ? 
-                    (rowIdx < starting_x + WARP_PER_BLOCK) : (rowIdx > starting_x - WARP_PER_BLOCK);
-        if (cond) {
-            const int pos = substitution == SUBSTITUTION_FORWARD ? 
-                            rowIdx - starting_x : starting_x - rowIdx;
+        const bool cond = substitution == SUBSTITUTION_FORWARD ? (rowIdx < starting_x + WARP_PER_BLOCK) : (rowIdx > starting_x - WARP_PER_BLOCK);
+        if (cond)
+        {
+            const int pos = substitution == SUBSTITUTION_FORWARD ? rowIdx - starting_x : starting_x - rowIdx;
             atomicAdd((VALUE_TYPE *)&s_left_sum[pos], xi * d_cscVal[j]);
             __threadfence_block();
             atomicAdd((int *)&s_graphInDegree[pos], 1);
         }
-        else {
+        else
+        {
             atomicAdd(&d_left_sum[rowIdx], xi * d_cscVal[j]);
             __threadfence();
             atomicSub(&d_graphInDegree[rowIdx], 1);
@@ -179,28 +255,28 @@ void sptrsv_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     }
 
     //finish
-    if (!lane_id) d_x[global_x_id] = xi;
+    if (!lane_id)
+        d_x[global_x_id] = xi;
 }
 
-__global__
-void sptrsv_syncfree_cuda_shared(const int* __restrict__        d_cscColPtr,
-                                   const int* __restrict__        d_cscRowIdx,
-                                   const VALUE_TYPE* __restrict__ d_cscVal,
-                                         int*                     d_graphInDegree,
-                                         VALUE_TYPE*              d_left_sum,
-                                   const int                      m,
-                                   const int                      substitution,
-                                   const VALUE_TYPE* __restrict__ d_b,
-                                         VALUE_TYPE*              d_x,
-                                         int*                     d_while_profiler)
+__global__ void sptrsv_syncfree_cuda_shared(const int *__restrict__ d_cscColPtr,
+                                            const int *__restrict__ d_cscRowIdx,
+                                            const VALUE_TYPE *__restrict__ d_cscVal,
+                                            int *d_graphInDegree,
+                                            VALUE_TYPE *d_left_sum,
+                                            const int m,
+                                            const int substitution,
+                                            const VALUE_TYPE *__restrict__ d_b,
+                                            VALUE_TYPE *d_x,
+                                            int *d_while_profiler)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
     int global_x_id = global_id / WARP_SIZE;
-    if (global_x_id >= m) return;
+    if (global_x_id >= m)
+        return;
 
     // substitution is forward or backward
-    global_x_id = substitution == SUBSTITUTION_FORWARD ? 
-                  global_x_id : m - 1 - global_x_id;
+    global_x_id = substitution == SUBSTITUTION_FORWARD ? global_x_id : m - 1 - global_x_id;
 
     volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
     volatile __shared__ VALUE_TYPE s_left_sum[WARP_PER_BLOCK];
@@ -209,32 +285,34 @@ void sptrsv_syncfree_cuda_shared(const int* __restrict__        d_cscColPtr,
     const int local_warp_id = threadIdx.x / WARP_SIZE;
     const int lane_id = (WARP_SIZE - 1) & threadIdx.x;
 
-      int starting_x = (global_id / (WARP_PER_BLOCK * WARP_SIZE)) * WARP_PER_BLOCK;
-    starting_x = substitution == SUBSTITUTION_FORWARD ? 
-                  starting_x : m - 1 - starting_x;
-    
+    int starting_x = (global_id / (WARP_PER_BLOCK * WARP_SIZE)) * WARP_PER_BLOCK;
+    starting_x = substitution == SUBSTITUTION_FORWARD ? starting_x : m - 1 - starting_x;
+
     // Prefetch
-    const int pos = substitution == SUBSTITUTION_FORWARD ?
-                    d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id+1]-1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id + 1] - 1;
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
-    if (threadIdx.x < WARP_PER_BLOCK) { s_graphInDegree[threadIdx.x] = 1; s_left_sum[threadIdx.x] = 0; }
+    if (threadIdx.x < WARP_PER_BLOCK)
+    {
+        s_graphInDegree[threadIdx.x] = 1;
+        s_left_sum[threadIdx.x] = 0;
+    }
     __syncthreads();
 
     clock_t start;
     // Consumer
-    do {
+    do
+    {
         start = clock();
-    }
-    while ((s_graphInDegree[local_warp_id]+1)!= d_graphInDegree[global_x_id]);
-  
+    } while ((s_graphInDegree[local_warp_id] + 1) != d_graphInDegree[global_x_id]);
+
     //// Consumer
     //int graphInDegree;
     //do {
     //    //bypass Tex cache and avoid other mem optimization by nvcc/ptxas
-    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory"); 
+    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory");
     //}
     //while (s_graphInDegree[local_warp_id] != graphInDegree );
 
@@ -242,37 +320,33 @@ void sptrsv_syncfree_cuda_shared(const int* __restrict__        d_cscColPtr,
     xi = (d_b[global_x_id] - xi) * coef;
 
     // Producer
-    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id]+1 : d_cscColPtr[global_x_id];
-    const int stop_ptr  = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id+1] : d_cscColPtr[global_x_id+1]-1;
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] + 1 : d_cscColPtr[global_x_id];
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id + 1] : d_cscColPtr[global_x_id + 1] - 1;
     for (int jj = start_ptr + lane_id; jj < stop_ptr; jj += WARP_SIZE)
     {
         const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
         const int rowIdx = d_cscRowIdx[j];
-            const int pos = substitution == SUBSTITUTION_FORWARD ? 
-                            rowIdx - starting_x : starting_x - rowIdx;
-            atomicAdd((VALUE_TYPE *)&s_left_sum[pos], xi * d_cscVal[j]);
-            __threadfence_block();
-            atomicAdd((int *)&s_graphInDegree[pos], 1);
-     
+        const int pos = substitution == SUBSTITUTION_FORWARD ? rowIdx - starting_x : starting_x - rowIdx;
+        atomicAdd((VALUE_TYPE *)&s_left_sum[pos], xi * d_cscVal[j]);
+        __threadfence_block();
+        atomicAdd((int *)&s_graphInDegree[pos], 1);
     }
 
     //finish
-    if (!lane_id) d_x[global_x_id] = xi;
+    if (!lane_id)
+        d_x[global_x_id] = xi;
 }
-__global__
-void sptrsv_syncfree_cuda_executor_update(const int*         d_cscColPtr,
-                                          const int*         d_cscRowIdx,
-                                          const VALUE_TYPE*  d_cscVal,
-                                          int*                           d_graphInDegree,
-                                          VALUE_TYPE*                    d_left_sum,
-                                          const int                      m,
-                                          const int                      substitution,
-                                          const VALUE_TYPE*  d_b,
-                                          VALUE_TYPE*                    d_x,
-                                          int*                           d_while_profiler,
-                                          int*                           d_id_extractor)
+__global__ void sptrsv_syncfree_cuda_executor_update(const int *d_cscColPtr,
+                                                     const int *d_cscRowIdx,
+                                                     const VALUE_TYPE *d_cscVal,
+                                                     int *d_graphInDegree,
+                                                     VALUE_TYPE *d_left_sum,
+                                                     const int m,
+                                                     const int substitution,
+                                                     const VALUE_TYPE *d_b,
+                                                     VALUE_TYPE *d_x,
+                                                     int *d_while_profiler,
+                                                     int *d_id_extractor)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -284,33 +358,30 @@ void sptrsv_syncfree_cuda_executor_update(const int*         d_cscColPtr,
         global_x_id = atomicAdd(d_id_extractor, 1);
     global_x_id = __shfl(global_x_id, 0);
 
-    if (global_x_id >= m) return;
+    if (global_x_id >= m)
+        return;
 
     // substitution is forward or backward
-    global_x_id = substitution == SUBSTITUTION_FORWARD ? 
-                  global_x_id : m - 1 - global_x_id;
-    
+    global_x_id = substitution == SUBSTITUTION_FORWARD ? global_x_id : m - 1 - global_x_id;
+
     // Prefetch
-    const int pos = substitution == SUBSTITUTION_FORWARD ?
-                    d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id+1]-1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id + 1] - 1;
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
     // Consumer
-    do {
+    do
+    {
         __threadfence_block();
-    }
-    while (d_graphInDegree[global_x_id] != 1);
+    } while (d_graphInDegree[global_x_id] != 1);
 
     VALUE_TYPE xi = d_left_sum[global_x_id];
     xi = (d_b[global_x_id] - xi) * coef;
 
     // Producer
-    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id]+1 : d_cscColPtr[global_x_id];
-    const int stop_ptr  = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id+1] : d_cscColPtr[global_x_id+1]-1;
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] + 1 : d_cscColPtr[global_x_id];
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id + 1] : d_cscColPtr[global_x_id + 1] - 1;
     for (int jj = start_ptr + lane_id; jj < stop_ptr; jj += WARP_SIZE)
     {
         const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
@@ -322,54 +393,52 @@ void sptrsv_syncfree_cuda_executor_update(const int*         d_cscColPtr,
     }
 
     //finish
-    if (!lane_id) d_x[global_x_id] = xi;
+    if (!lane_id)
+        d_x[global_x_id] = xi;
 }
 
-
-__global__
-void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
-                                   const int* __restrict__        d_cscRowIdx,
-                                   const VALUE_TYPE* __restrict__ d_cscVal,
-                                         int*                     d_graphInDegree,
-                                         VALUE_TYPE*              d_left_sum,
-                                   const int                      m,
-                                   const int                      substitution,
-                                   const int                      rhs,
-                                   const int                      opt,
-                                   const VALUE_TYPE* __restrict__ d_b,
-                                         VALUE_TYPE*              d_x,
-                                         int*                     d_while_profiler)
+__global__ void sptrsm_syncfree_cuda_executor(const int *__restrict__ d_cscColPtr,
+                                              const int *__restrict__ d_cscRowIdx,
+                                              const VALUE_TYPE *__restrict__ d_cscVal,
+                                              int *d_graphInDegree,
+                                              VALUE_TYPE *d_left_sum,
+                                              const int m,
+                                              const int substitution,
+                                              const int rhs,
+                                              const int opt,
+                                              const VALUE_TYPE *__restrict__ d_b,
+                                              VALUE_TYPE *d_x,
+                                              int *d_while_profiler)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
     int global_x_id = global_id / WARP_SIZE;
-    if (global_x_id >= m) return;
+    if (global_x_id >= m)
+        return;
 
     // substitution is forward or backward
-    global_x_id = substitution == SUBSTITUTION_FORWARD ? 
-                  global_x_id : m - 1 - global_x_id;
+    global_x_id = substitution == SUBSTITUTION_FORWARD ? global_x_id : m - 1 - global_x_id;
 
     // Initialize
     const int lane_id = (WARP_SIZE - 1) & threadIdx.x;
 
     // Prefetch
-    const int pos = substitution == SUBSTITUTION_FORWARD ?
-                d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id+1]-1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id + 1] - 1;
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
     clock_t start;
     // Consumer
-    do {
+    do
+    {
         start = clock();
-    }
-    while (1 != d_graphInDegree[global_x_id]);
-  
+    } while (1 != d_graphInDegree[global_x_id]);
+
     //// Consumer
     //int graphInDegree;
     //do {
     //    //bypass Tex cache and avoid other mem optimization by nvcc/ptxas
-    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory"); 
+    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory");
     //}
     //while (1 != graphInDegree );
 
@@ -380,10 +449,8 @@ void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     }
 
     // Producer
-    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id]+1 : d_cscColPtr[global_x_id];
-    const int stop_ptr  = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id+1] : d_cscColPtr[global_x_id+1]-1;
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] + 1 : d_cscColPtr[global_x_id];
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id + 1] : d_cscColPtr[global_x_id + 1] - 1;
 
     if (opt == OPT_WARP_NNZ)
     {
@@ -403,10 +470,11 @@ void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
         {
             const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
             const int rowIdx = d_cscRowIdx[j];
-            for (int k = lane_id; k < rhs; k+=WARP_SIZE)
+            for (int k = lane_id; k < rhs; k += WARP_SIZE)
                 atomicAdd(&d_left_sum[rowIdx * rhs + k], d_x[global_x_id * rhs + k] * d_cscVal[j]);
             __threadfence();
-            if (!lane_id) atomicSub(&d_graphInDegree[rowIdx], 1);
+            if (!lane_id)
+                atomicSub(&d_graphInDegree[rowIdx], 1);
         }
     }
     else if (opt == OPT_WARP_AUTO)
@@ -419,10 +487,11 @@ void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
             {
                 const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
                 const int rowIdx = d_cscRowIdx[j];
-                for (int k = lane_id; k < rhs; k+=WARP_SIZE)
+                for (int k = lane_id; k < rhs; k += WARP_SIZE)
                     atomicAdd(&d_left_sum[rowIdx * rhs + k], d_x[global_x_id * rhs + k] * d_cscVal[j]);
                 __threadfence();
-                if (!lane_id) atomicSub(&d_graphInDegree[rowIdx], 1);
+                if (!lane_id)
+                    atomicSub(&d_graphInDegree[rowIdx], 1);
             }
         }
         else
@@ -440,21 +509,19 @@ void sptrsm_syncfree_cuda_executor(const int* __restrict__        d_cscColPtr,
     }
 }
 
-
-__global__
-void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscColPtr,
-                                          const int* __restrict__        d_cscRowIdx,
-                                          const VALUE_TYPE* __restrict__ d_cscVal,
-                                          int*                           d_graphInDegree,
-                                          VALUE_TYPE*                    d_left_sum,
-                                          const int                      m,
-                                          const int                      substitution,
-                                          const int                      rhs,
-                                          const int                      opt,
-                                          const VALUE_TYPE* __restrict__ d_b,
-                                          VALUE_TYPE*                    d_x,
-                                          int*                           d_while_profiler,
-                                          int*                           d_id_extractor)
+__global__ void sptrsm_syncfree_cuda_executor_update(const int *__restrict__ d_cscColPtr,
+                                                     const int *__restrict__ d_cscRowIdx,
+                                                     const VALUE_TYPE *__restrict__ d_cscVal,
+                                                     int *d_graphInDegree,
+                                                     VALUE_TYPE *d_left_sum,
+                                                     const int m,
+                                                     const int substitution,
+                                                     const int rhs,
+                                                     const int opt,
+                                                     const VALUE_TYPE *__restrict__ d_b,
+                                                     VALUE_TYPE *d_x,
+                                                     int *d_while_profiler,
+                                                     int *d_id_extractor)
 {
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -466,30 +533,29 @@ void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscCo
         global_x_id = atomicAdd(d_id_extractor, 1);
     global_x_id = __shfl(global_x_id, 0);
 
-    if (global_x_id >= m) return;
+    if (global_x_id >= m)
+        return;
 
     // substitution is forward or backward
-    global_x_id = substitution == SUBSTITUTION_FORWARD ? 
-                  global_x_id : m - 1 - global_x_id;
+    global_x_id = substitution == SUBSTITUTION_FORWARD ? global_x_id : m - 1 - global_x_id;
 
     // Prefetch
-    const int pos = substitution == SUBSTITUTION_FORWARD ?
-                d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id+1]-1;
+    const int pos = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] : d_cscColPtr[global_x_id + 1] - 1;
     const VALUE_TYPE coef = (VALUE_TYPE)1 / d_cscVal[pos];
     //asm("prefetch.global.L2 [%0];"::"d"(d_cscVal[d_cscColPtr[global_x_id] + 1 + lane_id]));
     //asm("prefetch.global.L2 [%0];"::"r"(d_cscRowIdx[d_cscColPtr[global_x_id] + 1 + lane_id]));
 
     // Consumer
-    do {
+    do
+    {
         __threadfence_block();
-    }
-    while (1 != d_graphInDegree[global_x_id]);
-  
+    } while (1 != d_graphInDegree[global_x_id]);
+
     //// Consumer
     //int graphInDegree;
     //do {
     //    //bypass Tex cache and avoid other mem optimization by nvcc/ptxas
-    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory"); 
+    //    asm("ld.global.u32 %0, [%1];" : "=r"(graphInDegree),"=r"(d_graphInDegree[global_x_id]) :: "memory");
     //}
     //while (1 != graphInDegree );
 
@@ -500,10 +566,8 @@ void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscCo
     }
 
     // Producer
-    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id]+1 : d_cscColPtr[global_x_id];
-    const int stop_ptr  = substitution == SUBSTITUTION_FORWARD ? 
-                          d_cscColPtr[global_x_id+1] : d_cscColPtr[global_x_id+1]-1;
+    const int start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id] + 1 : d_cscColPtr[global_x_id];
+    const int stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[global_x_id + 1] : d_cscColPtr[global_x_id + 1] - 1;
 
     if (opt == OPT_WARP_NNZ)
     {
@@ -523,10 +587,11 @@ void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscCo
         {
             const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
             const int rowIdx = d_cscRowIdx[j];
-            for (int k = lane_id; k < rhs; k+=WARP_SIZE)
+            for (int k = lane_id; k < rhs; k += WARP_SIZE)
                 atomicAdd(&d_left_sum[rowIdx * rhs + k], d_x[global_x_id * rhs + k] * d_cscVal[j]);
             __threadfence();
-            if (!lane_id) atomicSub(&d_graphInDegree[rowIdx], 1);
+            if (!lane_id)
+                atomicSub(&d_graphInDegree[rowIdx], 1);
         }
     }
     else if (opt == OPT_WARP_AUTO)
@@ -539,10 +604,11 @@ void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscCo
             {
                 const int j = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
                 const int rowIdx = d_cscRowIdx[j];
-                for (int k = lane_id; k < rhs; k+=WARP_SIZE)
+                for (int k = lane_id; k < rhs; k += WARP_SIZE)
                     atomicAdd(&d_left_sum[rowIdx * rhs + k], d_x[global_x_id * rhs + k] * d_cscVal[j]);
                 __threadfence();
-                if (!lane_id) atomicSub(&d_graphInDegree[rowIdx], 1);
+                if (!lane_id)
+                    atomicSub(&d_graphInDegree[rowIdx], 1);
             }
         }
         else
@@ -560,19 +626,20 @@ void sptrsm_syncfree_cuda_executor_update(const int* __restrict__        d_cscCo
     }
 }
 
-int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
-                         const int           *cscRowIdxTR,
-                         const VALUE_TYPE    *cscValTR,
-                         const int            m,
-                         const int            n,
-                         const int            nnzTR,
-                         const int            substitution,
-                         const int            rhs,
-                         const int            opt,
-                               VALUE_TYPE    *x,
-                         const VALUE_TYPE    *b,
-                         const VALUE_TYPE    *x_ref,
-                               double        *gflops)
+int sptrsvCSC_syncfree_cuda(const int *cscColPtrTR,
+                            const int *cscRowIdxTR,
+                            const VALUE_TYPE *cscValTR,
+                            const int m,
+                            const int n,
+                            const int nnzTR,
+                            const int substitution,
+                            const int rhs,
+                            const int opt,
+                            VALUE_TYPE *x,
+                            const VALUE_TYPE *b,
+                            const VALUE_TYPE *x_ref,
+                            double *gflops,
+                            int * levelItem)
 {
     if (m != n)
     {
@@ -583,18 +650,21 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
     // transfer host mem to device mem
     int *d_cscColPtrTR;
     int *d_cscRowIdxTR;
+    int *jlev;
     VALUE_TYPE *d_cscValTR;
     VALUE_TYPE *d_b;
     VALUE_TYPE *d_x;
 
     // Matrix L
-    cudaMalloc((void **)&d_cscColPtrTR, (n+1) * sizeof(int));
-    cudaMalloc((void **)&d_cscRowIdxTR, nnzTR  * sizeof(int));
-    cudaMalloc((void **)&d_cscValTR,    nnzTR  * sizeof(VALUE_TYPE));
+    cudaMalloc((void **)&d_cscColPtrTR, (n + 1) * sizeof(int));
+    cudaMalloc((void **)&d_cscRowIdxTR, nnzTR * sizeof(int));
+    cudaMalloc((void **)&d_cscValTR, nnzTR * sizeof(VALUE_TYPE));
+     cudaMalloc((void **)&jlev, n * sizeof(int));
 
-    cudaMemcpy(d_cscColPtrTR, cscColPtrTR, (n+1) * sizeof(int),   cudaMemcpyHostToDevice);
-    cudaMemcpy(d_cscRowIdxTR, cscRowIdxTR, nnzTR  * sizeof(int),   cudaMemcpyHostToDevice);
-    cudaMemcpy(d_cscValTR,    cscValTR,    nnzTR  * sizeof(VALUE_TYPE),   cudaMemcpyHostToDevice);
+    cudaMemcpy(d_cscColPtrTR, cscColPtrTR, (n + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_cscRowIdxTR, cscRowIdxTR, nnzTR * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_cscValTR, cscValTR, nnzTR * sizeof(VALUE_TYPE), cudaMemcpyHostToDevice);
+    cudaMemcpy(jlev,levelItem,sizeof(int)*n,cudaMemcpyHostToDevice);
 
     // Vector b
     cudaMalloc((void **)&d_b, m * rhs * sizeof(VALUE_TYPE));
@@ -620,13 +690,12 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
     cudaMalloc((void **)&d_id_extractor, sizeof(int));
 
     int num_threads = 128;
-    int num_blocks = ceil ((double)nnzTR / (double)num_threads);
+    int num_blocks = ceil((double)nnzTR / (double)num_threads);
 
     for (int i = 0; i < BENCH_REPEAT; i++)
     {
         cudaMemset(d_graphInDegree, 0, m * sizeof(int));
-        sptrsv_syncfree_cuda_analyser<<< num_blocks, num_threads >>>
-                                      (d_cscRowIdxTR, m, nnzTR, d_graphInDegree);
+        sptrsv_syncfree_cuda_analyser<<<num_blocks, num_threads>>>(d_cscRowIdxTR, m, nnzTR, d_graphInDegree);
     }
     cudaDeviceSynchronize();
 
@@ -660,7 +729,7 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
         // get a unmodified in-degree array, only for benchmarking use
         cudaMemcpy(d_graphInDegree, d_graphInDegree_backup, m * sizeof(int), cudaMemcpyDeviceToDevice);
         //cudaMemset(d_graphInDegree, 0, sizeof(int) * m);
-        
+
         // clear left_sum array, only for benchmarking use
         cudaMemset(d_left_sum, 0, sizeof(VALUE_TYPE) * m * rhs);
         cudaMemset(d_x, 0, sizeof(VALUE_TYPE) * n * rhs);
@@ -672,12 +741,14 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
         {
             num_threads = WARP_PER_BLOCK * WARP_SIZE;
             //num_threads = 1 * WARP_SIZE;
-            num_blocks = ceil ((double)m / (double)(num_threads/WARP_SIZE));
-            sptrsv_syncfree_cuda_shared<<< num_blocks, num_threads >>>
-            //sptrsv_syncfree_cuda_executor<<< num_blocks, num_threads >>>
-            (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
-                                          d_graphInDegree, d_left_sum,
-                                          m, substitution, d_b, d_x, d_while_profiler);
+            num_blocks = ceil((double)m / (double)(num_threads / WARP_SIZE));
+                        ELMC<VALUE_TYPE><<<num_blocks, num_threads>>>
+                (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
+                 d_graphInDegree,m,  d_b, d_x, jlev);
+            // sptrsv_syncfree_cuda_shared<<<num_blocks, num_threads>>>
+            //     (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
+            //      d_graphInDegree, d_left_sum,
+            //      m, substitution, d_b, d_x, d_while_profiler);
             // sptrsv_syncfree_cuda_executor_update<<< num_blocks, num_threads >>>
             //                              (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
             //                               d_graphInDegree, d_left_sum,
@@ -686,12 +757,11 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
         else
         {
             num_threads = 4 * WARP_SIZE;
-            num_blocks = ceil ((double)m / (double)(num_threads/WARP_SIZE));
-            sptrsm_syncfree_cuda_executor_update<<< num_blocks, num_threads >>>
-                                         (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
-                                          d_graphInDegree, d_left_sum,
-                                          m, substitution, rhs, opt,
-                                          d_b, d_x, d_while_profiler, d_id_extractor);
+            num_blocks = ceil((double)m / (double)(num_threads / WARP_SIZE));
+            sptrsm_syncfree_cuda_executor_update<<<num_blocks, num_threads>>>(d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
+                                                                              d_graphInDegree, d_left_sum,
+                                                                              m, substitution, rhs, opt,
+                                                                              d_b, d_x, d_while_profiler, d_id_extractor);
         }
 
         cudaDeviceSynchronize();
@@ -701,11 +771,11 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
     }
 
     time_cuda_solve /= BENCH_REPEAT;
-    double flop = 2*(double)rhs*(double)nnzTR;
+    double flop = 2 * (double)rhs * (double)nnzTR;
 
     printf("cuda syncfree SpTRSV CSC solve used %4.9f ms, throughput is %4.2f gflops\n",
-           time_cuda_solve, flop/(1e6*time_cuda_solve));
-    *gflops = flop/(1e6*time_cuda_solve);
+           time_cuda_solve, flop / (1e6 * time_cuda_solve));
+    *gflops = flop / (1e6 * time_cuda_solve);
 
     cudaMemcpy(x, d_x, n * rhs * sizeof(VALUE_TYPE), cudaMemcpyDeviceToHost);
 
@@ -740,6 +810,7 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
     // step 6: free resources
     free(while_profiler);
 
+cudaFree(jlev);
     cudaFree(d_graphInDegree);
     cudaFree(d_graphInDegree_backup);
     cudaFree(d_id_extractor);
@@ -755,19 +826,19 @@ int sptrsvCSC_syncfree_cuda(const int           *cscColPtrTR,
     return 0;
 }
 
-int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
-                         const int           *cscColIdxTR,
-                         const VALUE_TYPE    *csrValTR,
-                         const int            m,
-                         const int            n,
-                         const int            nnzTR,
-                         const int            substitution,
-                         const int            rhs,
-                         const int            opt,
-                               VALUE_TYPE    *x,
-                         const VALUE_TYPE    *b,
-                         const VALUE_TYPE    *x_ref,
-                               double        *gflops)
+int sptrsvCSR_syncfree_cuda(const int *csrRowPtrTR,
+                            const int *cscColIdxTR,
+                            const VALUE_TYPE *csrValTR,
+                            const int m,
+                            const int n,
+                            const int nnzTR,
+                            const int substitution,
+                            const int rhs,
+                            const int opt,
+                            VALUE_TYPE *x,
+                            const VALUE_TYPE *b,
+                            const VALUE_TYPE *x_ref,
+                            double *gflops)
 {
     if (m != n)
     {
@@ -778,18 +849,24 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
     // transfer host mem to device mem
     int *d_csrRowPtrTR;
     int *d_csrColIdxTR;
+    int *ready;
+    int *jlev;
     VALUE_TYPE *d_csrValTR;
     VALUE_TYPE *d_b;
     VALUE_TYPE *d_x;
 
     // Matrix L
-    cudaMalloc((void **)&d_csrRowPtrTR, (n+1) * sizeof(int));
-    cudaMalloc((void **)&d_csrColIdxTR, nnzTR  * sizeof(int));
-    cudaMalloc((void **)&d_csrValTR,    nnzTR  * sizeof(VALUE_TYPE));
+    cudaMalloc((void **)&d_csrRowPtrTR, (n + 1) * sizeof(int));
+    cudaMalloc((void **)&d_csrColIdxTR, nnzTR * sizeof(int));
+    cudaMalloc((void **)&d_csrValTR, nnzTR * sizeof(VALUE_TYPE));
 
-    cudaMemcpy(d_csrRowPtrTR, csrRowPtrTR, (n+1) * sizeof(int),   cudaMemcpyHostToDevice);
-    cudaMemcpy(d_csrColIdxTR, cscColIdxTR, nnzTR  * sizeof(int),   cudaMemcpyHostToDevice);
-    cudaMemcpy(d_csrValTR,    csrValTR,    nnzTR  * sizeof(VALUE_TYPE),   cudaMemcpyHostToDevice);
+    cudaMalloc((void **)&ready, nnzTR * sizeof(int));
+    cudaMalloc((void **)&jlev, (n + 1) * sizeof(int));
+    cudaMemset(ready, 0, nnzTR * sizeof(int));
+
+    cudaMemcpy(d_csrRowPtrTR, csrRowPtrTR, (n + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_csrColIdxTR, cscColIdxTR, nnzTR * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_csrValTR, csrValTR, nnzTR * sizeof(VALUE_TYPE), cudaMemcpyHostToDevice);
 
     // Vector b
     cudaMalloc((void **)&d_b, m * rhs * sizeof(VALUE_TYPE));
@@ -815,13 +892,12 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
     cudaMalloc((void **)&d_id_extractor, sizeof(int));
 
     int num_threads = 128;
-    int num_blocks = ceil ((double)m / (double)num_threads);
+    int num_blocks = ceil((double)m / (double)num_threads);
 
     for (int i = 0; i < BENCH_REPEAT; i++)
     {
         cudaMemset(d_graphInDegree, 0, m * sizeof(int));
-        sptrsvCSRAnalyser<<< num_blocks, num_threads >>>
-                                      (d_csrColIdxTR, m,  d_graphInDegree);
+        sptrsvCSRAnalyser<<<num_blocks, num_threads>>>(d_csrColIdxTR, m, d_graphInDegree);
     }
     cudaDeviceSynchronize();
 
@@ -855,11 +931,9 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
         // get a unmodified in-degree array, only for benchmarking use
         cudaMemcpy(d_graphInDegree, d_graphInDegree_backup, m * sizeof(int), cudaMemcpyDeviceToDevice);
         //cudaMemset(d_graphInDegree, 0, sizeof(int) * m);
-        
+
         // clear left_sum array, only for benchmarking use
-        cudaMemset(d_left_sum, 0, sizeof(VALUE_TYPE) * m * rhs);
         cudaMemset(d_x, 0, sizeof(VALUE_TYPE) * n * rhs);
-        cudaMemset(d_id_extractor, 0, sizeof(int));
 
         gettimeofday(&t1, NULL);
 
@@ -867,18 +941,15 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
         {
             num_threads = WARP_PER_BLOCK * WARP_SIZE;
             //num_threads = 1 * WARP_SIZE;
-            num_blocks = ceil ((double)m / (double)(num_threads/WARP_SIZE));
-            sptrsvCSRSyncfree<VALUE_TYPE><<< num_blocks, num_threads >>>
-            //sptrsv_syncfree_cuda_executor<<< num_blocks, num_threads >>>
-            (d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR,d_b,
-                                          d_graphInDegree,substitution,
-                                          m,   d_x);
-            // sptrsv_syncfree_cuda_executor_update<<< num_blocks, num_threads >>>
-            //                              (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
-            //                               d_graphInDegree, d_left_sum,
-            //                               m, substitution, d_b, d_x, d_while_profiler, d_id_extractor);
+            num_blocks = ceil((double)m / (double)(num_threads / WARP_SIZE));
+            // sptrsvCSRSyncfree<VALUE_TYPE><<<num_blocks, num_threads>>>
+            //     (d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b,
+            //      d_graphInDegree, substitution,
+            //      m, d_x);
+            ELMR<VALUE_TYPE><<<num_blocks, num_threads>>>(d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b, m, d_x, ready);
         }
-        else{
+        else
+        {
             printf("no more than 1 rhs.\n");
         }
 
@@ -889,11 +960,11 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
     }
 
     time_cuda_solve /= BENCH_REPEAT;
-    double flop = 2*(double)rhs*(double)nnzTR;
+    double flop = 2 * (double)rhs * (double)nnzTR;
 
     printf("cuda syncfree SpTRSV CSR solve used %4.9f ms, throughput is %4.2f gflops\n",
-           time_cuda_solve, flop/(1e6*time_cuda_solve));
-    *gflops = flop/(1e6*time_cuda_solve);
+           time_cuda_solve, flop / (1e6 * time_cuda_solve));
+    *gflops = flop / (1e6 * time_cuda_solve);
 
     cudaMemcpy(x, d_x, n * rhs * sizeof(VALUE_TYPE), cudaMemcpyDeviceToHost);
 
@@ -930,6 +1001,7 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
 
     cudaFree(d_graphInDegree);
     cudaFree(d_graphInDegree_backup);
+    cudaFree(ready);
     cudaFree(d_id_extractor);
     cudaFree(d_left_sum);
     cudaFree(d_while_profiler);
@@ -944,6 +1016,3 @@ int sptrsvCSR_syncfree_cuda(const int           *csrRowPtrTR,
 }
 
 #endif
-
-
-
