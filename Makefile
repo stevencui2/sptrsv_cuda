@@ -31,15 +31,19 @@ SRC_DIRS:=
 
 SRCS:=$(shell find $(SRC_DIRS)-name *.cu)
 
+DEPSHeader:=$(shell find $(SRC_DIRS) -name '*.h'  -or -name '*.cuh')
+
 OBJS:=$(SRCS:%=$(BUILD_DIR)/%.o)
 
 
 DEPS:=$(OBJS:.o=.d)
 
+
+
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	$(CC) $(OBJS) -o $@	$(LDFLAGS)
 
-$(BUILD_DIR)/%.cu.o: %.cu
+$(BUILD_DIR)/%.cu.o: %.cu $(DEPSHeader)
 	mkdir -p $(dir $@)
 	$(CC) $(NVCC_FLAGS) -c $< -o $@ $(INCLUDES) $(LIBS) $(OPTIONS) -D VALUE_TYPE=$(VALUE_TYPE)
 

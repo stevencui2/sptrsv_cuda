@@ -74,7 +74,7 @@ __global__ void sptrsvCSRSyncfree(
     do
     {
         start = clock();
-    } while ((s_graphInDegree[localWarpIdx] + 1) != d_graphInDegree[gXIdx]);
+    } while (s_graphInDegree[localWarpIdx] != d_graphInDegree[gXIdx]);
 
     T xi = s_left_sum[localWarpIdx];
     xi = (d_RHS[gXIdx] - xi) * coef;
@@ -138,40 +138,54 @@ __global__ void ELMR(int *__restrict__ rowptr, int *__restrict__ colind, T *__re
     }
 }
 
+
 template <typename T>
-__global__ void
-ELMC(
-    int *colptr, int *rowind, T *val,  int *count, const int n, T *__restrict__ f,  T *x, int *jlev)
+__global__ void sptrsvElementschedulingCSCV2(
+	const int* __restrict__ d_cscColPtr,
+	const int* __restrict__ d_cscRowInd,
+	const T* __restrict__ d_cscVal,
+	const T* __restrict__ d_RHS, 
+	int* d_graphInDegree,
+	const int substitution,
+	const int m, T* d_y, int* jlev)
 {
-    int wid = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
-    int lane = threadIdx.x & (WARP_SIZE - 1);
-    if (wid >= n)
-        return;
-    int p = 0, q = 0,i=-1;
-    T t = 0.0;
-    if (lane < 2)
-    {
-        i = jlev[wid];
-        p = colptr[i + lane];
-    }
-    q = __shfl_sync(-1, p, 1);
-    p = __shfl_sync(-1, p, 0);
-    if (lane == 0)
-    {
-        t = 1.0 / colptr[i];
-        x[i] = f[i];
-        while (count[i] != 0)
-            ;
-        x[i] = t = x[i] * t;
-    }
-    t = __shfl_sync(-1, t, 0);
-    for (p += lane; p < q; p += WARP_SIZE)
-    {
-        atomicAdd(&x[rowind[p]], -t * val[p]);
-        __threadfence();
-        atomicSub(&count[rowind[p]], 1);
-    }
+	int warpIdx = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+	int laneIdx = threadIdx.x & (WARP_SIZE - 1);
+	if (warpIdx >= m)
+		return;
+
+	// substitution is forward or backward
+	warpIdx = substitution == SUBSTITUTION_FORWARD ? warpIdx : m - 1 - warpIdx;
+
+	int start_ptr = 0, stop_ptr = 0, pos = -1;
+	T coef = 0.0;
+
+	volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
+	if (threadIdx.x < WARP_PER_BLOCK) { s_graphInDegree[threadIdx.x] = 1; }
+	__syncthreads();
+
+    pos = substitution == SUBSTITUTION_FORWARD ? jlev[warpIdx] : jlev[warpIdx + 1] - 1;
+    start_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[pos] + 1 : d_cscColPtr[pos];
+	stop_ptr = substitution == SUBSTITUTION_FORWARD ? d_cscColPtr[pos + 1] : d_cscColPtr[pos + 1] - 1;
+
+	if (laneIdx == 0)
+	{
+		coef = 1.0 / d_cscVal[pos];
+		d_y[pos] = d_RHS[pos];
+		while (s_graphInDegree[pos] != d_graphInDegree[pos]);
+		d_y[pos] = coef = d_y[pos] * coef;
+	}
+	coef = __shfl_sync(-1, coef, 0);
+	for (int jj =start_ptr+ laneIdx; jj < stop_ptr; jj += WARP_SIZE)
+	{
+		jj = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
+		int rowIdx = d_cscRowInd[jj];
+		atomicAdd(&d_y[rowIdx], -coef * d_cscVal[jj]);
+		__threadfence();
+		atomicAdd((int*)&s_graphInDegree[rowIdx], 1);
+	}
 }
+
 __global__ void sptrsv_syncfree_cuda_executor(const int *__restrict__ d_cscColPtr,
                                               const int *__restrict__ d_cscRowIdx,
                                               const VALUE_TYPE *__restrict__ d_cscVal,
@@ -262,14 +276,13 @@ __global__ void sptrsv_syncfree_cuda_executor(const int *__restrict__ d_cscColPt
 __global__ void sptrsv_syncfree_cuda_shared(const int *__restrict__ d_cscColPtr,
                                             const int *__restrict__ d_cscRowIdx,
                                             const VALUE_TYPE *__restrict__ d_cscVal,
-                                            int *d_graphInDegree,
-                                            VALUE_TYPE *d_left_sum,
-                                            const int m,
-                                            const int substitution,
                                             const VALUE_TYPE *__restrict__ d_b,
-                                            VALUE_TYPE *d_x,
-                                            int *d_while_profiler)
-{
+                                            int *d_graphInDegree,
+                                            const int substitution,
+                                            const int m,
+                                            VALUE_TYPE *d_x)
+                                            {
+
     const int global_id = blockIdx.x * blockDim.x + threadIdx.x;
     int global_x_id = global_id / WARP_SIZE;
     if (global_x_id >= m)
@@ -306,7 +319,7 @@ __global__ void sptrsv_syncfree_cuda_shared(const int *__restrict__ d_cscColPtr,
     do
     {
         start = clock();
-    } while ((s_graphInDegree[local_warp_id] + 1) != d_graphInDegree[global_x_id]);
+    } while (s_graphInDegree[local_warp_id]= d_graphInDegree[global_x_id]);
 
     //// Consumer
     //int graphInDegree;
@@ -742,17 +755,13 @@ int sptrsvCSC_syncfree_cuda(const int *cscColPtrTR,
             num_threads = WARP_PER_BLOCK * WARP_SIZE;
             //num_threads = 1 * WARP_SIZE;
             num_blocks = ceil((double)m / (double)(num_threads / WARP_SIZE));
-                        ELMC<VALUE_TYPE><<<num_blocks, num_threads>>>
-                (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
-                 d_graphInDegree,m,  d_b, d_x, jlev);
+                        sptrsvElementschedulingCSCV2<VALUE_TYPE><<<num_blocks, num_threads>>>
+                (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,d_b,
+                 d_graphInDegree,substitution,m,  d_x, jlev);
             // sptrsv_syncfree_cuda_shared<<<num_blocks, num_threads>>>
             //     (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
             //      d_graphInDegree, d_left_sum,
             //      m, substitution, d_b, d_x, d_while_profiler);
-            // sptrsv_syncfree_cuda_executor_update<<< num_blocks, num_threads >>>
-            //                              (d_cscColPtrTR, d_cscRowIdxTR, d_cscValTR,
-            //                               d_graphInDegree, d_left_sum,
-            //                               m, substitution, d_b, d_x, d_while_profiler, d_id_extractor);
         }
         else
         {
@@ -942,11 +951,11 @@ int sptrsvCSR_syncfree_cuda(const int *csrRowPtrTR,
             num_threads = WARP_PER_BLOCK * WARP_SIZE;
             //num_threads = 1 * WARP_SIZE;
             num_blocks = ceil((double)m / (double)(num_threads / WARP_SIZE));
-            // sptrsvCSRSyncfree<VALUE_TYPE><<<num_blocks, num_threads>>>
-            //     (d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b,
-            //      d_graphInDegree, substitution,
-            //      m, d_x);
-            ELMR<VALUE_TYPE><<<num_blocks, num_threads>>>(d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b, m, d_x, ready);
+            sptrsv_syncfree_cuda_shared<<<num_blocks, num_threads>>>
+                (d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b,
+                 d_graphInDegree, 1,
+                 m, d_x);
+            //ELMR<VALUE_TYPE><<<num_blocks, num_threads>>>(d_csrRowPtrTR, d_csrColIdxTR, d_csrValTR, d_b, m, d_x, ready);
         }
         else
         {

@@ -4,10 +4,10 @@ make all --print-data-base --no-builtin-variables --no-builtin-rules --question
 # Copyright (C) 1988-2016 Free Software Foundation, Inc.
 # License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
 # This is free software: you are free to change and redistribute it.
- 
 # There is NO WARRANTY, to the extent permitted by law.
+ 
 
-# Make data base, printed on Thu Sep 30 09:21:04 2021
+# Make data base, printed on Fri Oct  1 11:40:14 2021
 
 # Variables
 
@@ -43,11 +43,13 @@ _ = /mnt/v/Program Files/Microsoft VS Code/bin/code
 MAKEFILE_LIST :=  Makefile
 # 'override' directive
 GNUMAKEFLAGS := 
+# makefile (from 'Makefile', line 34)
+DEPSHeader := ./common.h ./findlevel.h ./mmio.h ./mmio_highlevel.h ./sptrsv_syncfree_cuda.cuh ./sptrsv_syncfree_serialref.h ./tranpose.h ./utils.h
 # environment
 XDG_DATA_DIRS = /usr/local/share:/usr/share:/var/lib/snapd/desktop
 # environment
 VSCODE_VERBOSE_LOGGING = true
-# makefile (from 'Makefile', line 34)
+# makefile (from 'Makefile', line 36)
 OBJS := ./build/./main.cu.o
 # environment
 LESSOPEN = | /usr/bin/lesspipe %s
@@ -62,7 +64,7 @@ VALUE_TYPE = double
 # environment
 VSCODE_LOG_STACK = false
 # environment
-VSCODE_IPC_HOOK_CLI = /tmp/vscode-ipc-2da5e29f-7dc0-4ff3-977f-8b0f6ebbcf0e.sock
+VSCODE_IPC_HOOK_CLI = /tmp/vscode-ipc-2c484015-5a78-4747-88ca-4a755dd92f35.sock
 # default
 .FEATURES := target-specific order-only second-expansion else-if shortest-stem undefine oneshell archives jobserver output-sync check-symlink load
 # environment
@@ -159,7 +161,7 @@ HOSTTYPE = x86_64
 LIBS = $(CUDA_LIBS)
 # automatic
 ^F = $(notdir $^)
-# makefile (from 'Makefile', line 37)
+# makefile (from 'Makefile', line 39)
 DEPS := ./build/./main.cu.d
 # default
 SUFFIXES := 
@@ -182,7 +184,7 @@ WSL_DISTRO_NAME = Ubuntu-20.04
 # environment
 MOTD_SHOWN = update-motd
 # variable set hash-table stats:
-# Load=85/1024=8%, Rehash=0, Collisions=7/123=6%
+# Load=86/1024=8%, Rehash=0, Collisions=7/130=5%
 
 # Pattern-specific Variable Values
 
@@ -196,14 +198,21 @@ MOTD_SHOWN = update-motd
 
 # Implicit Rules
 
-build/%.cu.o: %.cu
-#  recipe to execute (from 'Makefile', line 43):
+build/%.cu.o: %.cu common.h findlevel.h mmio.h mmio_highlevel.h sptrsv_syncfree_cuda.cuh sptrsv_syncfree_serialref.h tranpose.h utils.h
+#  recipe to execute (from 'Makefile', line 47):
 	mkdir -p $(dir $@)
 	$(CC) $(NVCC_FLAGS) -c $< -o $@ $(INCLUDES) $(LIBS) $(OPTIONS) -D VALUE_TYPE=$(VALUE_TYPE)
 
 # 1 implicit rules, 0 (0.0%) terminal.
 
 # Files
+
+# Not a target:
+mmio_highlevel.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-28 11:59:58.5478507
+#  File has been updated.
+#  Successfully updated.
 
 all: build/sptrsv
 #  Command line target.
@@ -214,26 +223,40 @@ all: build/sptrsv
 
 build/sptrsv: build/./main.cu.o
 #  Implicit rule search has not been done.
-#  Last modified 2021-09-29 15:48:55.625894
+#  Last modified 2021-10-01 11:39:56.9140756
 #  File has been updated.
 #  Successfully updated.
-#  recipe to execute (from 'Makefile', line 40):
+#  recipe to execute (from 'Makefile', line 44):
 	$(CC) $(OBJS) -o $@	$(LDFLAGS)
+
+# Not a target:
+utils.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-28 11:59:58.6178093
+#  File has been updated.
+#  Successfully updated.
 
 # Not a target:
 Makefile:
 #  Implicit rule search has been done.
-#  Last modified 2021-09-29 15:44:33.2944003
+#  Last modified 2021-10-01 11:40:13.1346457
 #  File has been updated.
 #  Successfully updated.
 
-build/./main.cu.o: main.cu
+# Not a target:
+sptrsv_syncfree_cuda.cuh:
 #  Implicit rule search has been done.
-#  Implicit/static pattern stem: './main'
-#  Last modified 2021-09-29 15:48:55.0126812
+#  Last modified 2021-10-01 11:33:30.5669053
 #  File has been updated.
 #  Successfully updated.
-#  recipe to execute (from 'Makefile', line 43):
+
+build/./main.cu.o: main.cu common.h findlevel.h mmio.h mmio_highlevel.h sptrsv_syncfree_cuda.cuh sptrsv_syncfree_serialref.h tranpose.h utils.h
+#  Implicit rule search has been done.
+#  Implicit/static pattern stem: './main'
+#  Last modified 2021-10-01 11:39:56.2730849
+#  File has been updated.
+#  Successfully updated.
+#  recipe to execute (from 'Makefile', line 47):
 	mkdir -p $(dir $@)
 	$(CC) $(NVCC_FLAGS) -c $< -o $@ $(INCLUDES) $(LIBS) $(OPTIONS) -D VALUE_TYPE=$(VALUE_TYPE)
 
@@ -243,34 +266,69 @@ build/./main.cu.o: main.cu
 #  Modification time never checked.
 #  File has not been updated.
 
+# Not a target:
+common.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-10-01 11:35:33.0861595
+#  File has been updated.
+#  Successfully updated.
+
+# Not a target:
+sptrsv_syncfree_serialref.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-28 11:59:58.5828297
+#  File has been updated.
+#  Successfully updated.
+
 clean:
 #  Implicit rule search has not been done.
 #  Modification time never checked.
 #  File has not been updated.
-#  recipe to execute (from 'Makefile', line 47):
+#  recipe to execute (from 'Makefile', line 51):
 	rm -rf $(BUILD_DIR)
 
 # Not a target:
 main.cu:
 #  Implicit rule search has been done.
-#  Last modified 2021-09-29 15:48:42.8439998
+#  Last modified 2021-10-01 10:57:34.5423017
+#  File has been updated.
+#  Successfully updated.
+
+# Not a target:
+findlevel.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-30 16:03:35.6863636
+#  File has been updated.
+#  Successfully updated.
+
+# Not a target:
+tranpose.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-30 09:30:24.526851
+#  File has been updated.
+#  Successfully updated.
+
+# Not a target:
+mmio.h:
+#  Implicit rule search has been done.
+#  Last modified 2021-09-28 11:59:58.5318605
 #  File has been updated.
 #  Successfully updated.
 
 # files hash-table stats:
-# Load=8/1024=1%, Rehash=0, Collisions=4/25=16%
+# Load=16/1024=2%, Rehash=0, Collisions=6/49=12%
 # VPATH Search Paths
 
 # No 'vpath' search paths.
 
 # No general ('VPATH' variable) search path.
 
-# strcache buffers: 1 (0) / strings = 30 / storage = 317 B / avg = 10 B
-# current buf: size = 8162 B / used = 317 B / count = 30 / avg = 10 B
+# strcache buffers: 1 (0) / strings = 30 / storage = 319 B / avg = 10 B
+# current buf: size = 8162 B / used = 319 B / count = 30 / avg = 10 B
 
-# strcache performance: lookups = 41 / hit rate = 26%
+# strcache performance: lookups = 65 / hit rate = 53%
 # hash-table stats:
-# Load=30/8192=0%, Rehash=0, Collisions=1/41=2%
-# Finished Make data base on Thu Sep 30 09:21:04 2021
+# Load=30/8192=0%, Rehash=0, Collisions=1/65=2%
+# Finished Make data base on Fri Oct  1 11:40:14 2021
 
  

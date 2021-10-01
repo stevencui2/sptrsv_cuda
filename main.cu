@@ -145,7 +145,8 @@ int main(int argc, char ** argv)
                     if (csrColIdxA[j] < i)
                     {
                         csrColIdxTR[nnz_pointer] = csrColIdxA[j];
-                        csrValTR[nnz_pointer] = rand() % 10 + 1; //csrValA[j]; 
+                        //csrValTR[nnz_pointer] = rand() % 10 + 1; 
+                        csrValTR[nnz_pointer] = csrValA[j]; 
                         nnz_pointer++;
                     }
                 }
@@ -154,7 +155,8 @@ int main(int argc, char ** argv)
                     if (csrColIdxA[j] > i)
                     {
                         csrColIdxTR[nnz_pointer] = csrColIdxA[j];
-                        csrValTR[nnz_pointer] = rand() % 10 + 1; //csrValA[j]; 
+                        //csrValTR[nnz_pointer] = rand() % 10 + 1; 
+                        csrValTR[nnz_pointer] = csrValA[j];
                         nnz_pointer++;
                     }
                 }
