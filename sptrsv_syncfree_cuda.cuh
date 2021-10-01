@@ -157,7 +157,7 @@ __global__ void sptrsvElementschedulingCSCV2(
 	// substitution is forward or backward
 	warpIdx = substitution == SUBSTITUTION_FORWARD ? warpIdx : m - 1 - warpIdx;
 
-	int start_ptr = 0, stop_ptr = 0, pos = -1;
+	int start_ptr = 0, stop_ptr = 0, pos = -1,xi=0;
 	T coef = 0.0;
 
 	volatile __shared__ int s_graphInDegree[WARP_PER_BLOCK];
@@ -171,19 +171,23 @@ __global__ void sptrsvElementschedulingCSCV2(
 	if (laneIdx == 0)
 	{
 		coef = 1.0 / d_cscVal[pos];
-		d_y[pos] = d_RHS[pos];
+		xi = d_RHS[pos];
 		while (s_graphInDegree[pos] != d_graphInDegree[pos]);
-		d_y[pos] = coef = d_y[pos] * coef;
+		xi = coef = xi * coef;
 	}
 	coef = __shfl_sync(-1, coef, 0);
+	xi = __shfl_sync(-1, xi, 0);
 	for (int jj =start_ptr+ laneIdx; jj < stop_ptr; jj += WARP_SIZE)
 	{
 		jj = substitution == SUBSTITUTION_FORWARD ? jj : stop_ptr - 1 - (jj - start_ptr);
 		int rowIdx = d_cscRowInd[jj];
-		atomicAdd(&d_y[rowIdx], -coef * d_cscVal[jj]);
+		atomicAdd(&xi, -coef * d_cscVal[jj]);
 		__threadfence();
 		atomicAdd((int*)&s_graphInDegree[rowIdx], 1);
 	}
+
+	//finish
+	if (!laneIdx) d_y[warpIdx] = xi;
 }
 
 __global__ void sptrsv_syncfree_cuda_executor(const int *__restrict__ d_cscColPtr,
